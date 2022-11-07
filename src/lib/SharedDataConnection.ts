@@ -86,7 +86,7 @@ export class SharedDataConnection<T extends {}> {
             break
           }
 
-          if (sessionId != this._sessionId) {
+          if (sessionId !== this._sessionId) {
             this.log.error('wrong session id', sessionId, this._sessionId)
             break
           }
