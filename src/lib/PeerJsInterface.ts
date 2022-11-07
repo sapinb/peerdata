@@ -2,13 +2,13 @@ import { Peer, DataConnection } from 'peerjs'
 import { ConsoleLogger, Logger } from './Logger'
 import type { NetworkInterface, OnDataListener, OnConnectedListener, NetworkConnection, BroadcastConfig } from './types'
 
-const connToNetworkConnecton = (conn: DataConnection): NetworkConnection => ({
-  ...conn,
-  send: conn.send,
-  id: conn.peer,
-})
+const connToNetworkConnection = (conn: DataConnection): NetworkConnection => {
+  const netConn = conn as any as NetworkConnection
+  netConn.id = conn.peer
+  return netConn
+}
 
-export class PeerJsInerface implements NetworkInterface {
+export class PeerJsInterface implements NetworkInterface {
   private _peer: Peer
   private _peerId?: string
   private _connections: Map<string, DataConnection> = new Map()
@@ -16,11 +16,15 @@ export class PeerJsInerface implements NetworkInterface {
   private _onConnectedListener?: OnConnectedListener
   readonly log: Logger
 
+  static instances: PeerJsInterface[] = []
+
   constructor(logger?: Logger) {
-    this._peer = new Peer
-    this.log = logger || new ConsoleLogger('PeerJsInterface')
+    PeerJsInterface.instances.push(this)
+    this._peer = new Peer()
+    this.log = logger || new ConsoleLogger('PeerJsInterface', ConsoleLogger.DEBUG)
 
     this._peer.on('open', id => {
+      this.log.debug('interface open', id)
       this._peerId = id
       this.log.tag = `PeerJsInterface/${id}`
     })
@@ -34,6 +38,11 @@ export class PeerJsInerface implements NetworkInterface {
     })
   }
 
+  cleanup() {
+    this._peer.destroy()
+    PeerJsInterface.instances = PeerJsInterface.instances.filter(instance => instance !== this)
+  }
+
   get id() {
     return this._peer.id
   }
@@ -43,9 +52,7 @@ export class PeerJsInerface implements NetworkInterface {
 
     this._setupConnection(conn)
 
-    this._onConnectedListener && this._onConnectedListener(connToNetworkConnecton(conn))
-
-    return connToNetworkConnecton(conn)
+    return connToNetworkConnection(conn)
   }
 
   peerIds() {
@@ -73,11 +80,12 @@ export class PeerJsInerface implements NetworkInterface {
     this._connections.set(conn.peer, conn)
 
     conn.on('open', () => {
-
+      this.log.debug('conn open')
+      this._onConnectedListener && this._onConnectedListener(connToNetworkConnection(conn))
     })
 
     conn.on('data', (data) => {
-      this._onDataListener && this._onDataListener(connToNetworkConnecton(conn), data)
+      this._onDataListener && this._onDataListener(connToNetworkConnection(conn), data)
     })
 
     conn.on('close', () => {
@@ -90,3 +98,16 @@ export class PeerJsInerface implements NetworkInterface {
 
   }
 }
+
+declare global {
+  interface _Dev {
+    PeerJsInterface: typeof PeerJsInterface
+  }
+
+  interface Window {
+    __dev: _Dev
+  }
+}
+
+window.__dev = window.__dev || {}
+window.__dev.PeerJsInterface = PeerJsInterface

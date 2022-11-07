@@ -15,4 +15,5 @@ export interface NetworkInterface {
   onData: (listener: OnDataListener) => void
   onConnected: (listener: OnConnectedListener) => void
   broadcast: (data: unknown, config?: BroadcastConfig) => void
+  cleanup?: () => void
 } 
