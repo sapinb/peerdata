@@ -88,12 +88,12 @@ function App() {
   const [message, setMessage] = useState<string>('')
 
   useEffect(() => {
-    console.log('use effect')
+    log.debug('use effect')
 
     const netConn = netConnRef.current = new PeerJsInterface()
     const sharedDataConn = sharedDataConnectionRef.current = new SharedDataConnection(netConn)
 
-    console.log('id', netConn.id)
+    log.debug('id', netConn.id)
 
     sharedDataConn.onChange((patch, before, after) => {
       dispatch({
@@ -104,7 +104,7 @@ function App() {
 
     return () => {
       // cleanup 
-      console.log('use effect: cleaning up')
+      log.debug('use effect: cleaning up')
       netConn.cleanup()
       sharedDataConn.cleanup()
     }
@@ -112,7 +112,7 @@ function App() {
   }, [])
 
   const onConnectToPeer = useCallback(() => {
-    console.log('connectTo', peerId)
+    log.debug('connectTo', peerId)
     dispatch({
       type: 'UI/Connect',
       peerId: peerId
