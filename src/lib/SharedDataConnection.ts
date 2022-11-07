@@ -23,22 +23,24 @@ const isMessage = (maybeMessage: any): maybeMessage is Message => maybeMessage &
 export class SharedDataConnection<T extends {}> {
   private _networkInterface: NetworkInterface
   private _sessionId?: string
-  private _sharedData: automerge.Doc<SharedData<T>>
-  private _isSharedDataInitialized: boolean = false
+  private _sharedData?: automerge.Doc<SharedData<T>>
   private _previouslyBroadcastedIds = new Set<string>()
+  private _onChangeListener?: automerge.PatchCallback<SharedData<T>>
   readonly log: Logger
 
+  static instances: SharedDataConnection<any>[] = []
+
   constructor(networkInterface: NetworkInterface, logger?: Logger) {
-    this.log = logger || new ConsoleLogger()
+    SharedDataConnection.instances.push(this)
+    this.log = logger || new ConsoleLogger('SharedDataConnection', ConsoleLogger.DEBUG)
     this.log.tag = `SharedDataConnection/${networkInterface.id}`
 
-    this._sharedData = automerge.init<SharedData<T>>()
     this._networkInterface = networkInterface
 
     this._networkInterface.onConnected((conn) => {
       // on connection, if we dont already have a session, request for init
       this.log.debug('onConnected')
-      if (!this._isSharedDataInitialized) {
+      if (!this._sharedData) {
         this._sendMessageTo(conn, {
           type: 'requestSessionInit',
         })
@@ -59,14 +61,18 @@ export class SharedDataConnection<T extends {}> {
           // accept if the node is not already initialized
           const { sessionId, sharedData } = msg
 
-          if (this._isSharedDataInitialized) {
+          if (this._sharedData) {
             this.log.error('Already initialized')
             break;
           }
 
           this._sessionId = sessionId
 
-          this._sharedData = automerge.load(new Uint8Array(sharedData))
+          const emptyDoc = automerge.init({ patchCallback: this._patchCallback })
+
+          const [doc] = automerge.applyChanges(emptyDoc, sharedData.map((arrayBuf: ArrayBuffer) => new Uint8Array(arrayBuf)))
+
+          this._sharedData = doc
 
           break;
         }
@@ -74,6 +80,11 @@ export class SharedDataConnection<T extends {}> {
           // another node is sending over changes
           // accept if from same session id
           const { sessionId, changes } = msg
+
+          if (!this._sharedData) {
+            // not initialized yet. Dont to anything
+            break
+          }
 
           if (sessionId != this._sessionId) {
             this.log.error('wrong session id', sessionId, this._sessionId)
@@ -87,7 +98,7 @@ export class SharedDataConnection<T extends {}> {
         case 'requestSessionInit': {
           // another node has requested session initialization.
 
-          if (!this._isSharedDataInitialized) {
+          if (!this._sharedData) {
             // we havent initialized ourselves... dont do anything (but relay init message and hope someone answers)
             break
           }
@@ -97,7 +108,7 @@ export class SharedDataConnection<T extends {}> {
           shouldRelay = false
           this._sendMessageTo(conn, {
             type: 'initSession',
-            sharedData: automerge.save(this._sharedData).buffer,
+            sharedData: automerge.getAllChanges(this._sharedData),
           })
           break
         }
@@ -107,37 +118,49 @@ export class SharedDataConnection<T extends {}> {
       }
 
       if (shouldRelay) {
-        this._broadcastMessage(msg)
+        this._broadcastMessage(msg, conn.id)
       }
     })
   }
 
+  cleanup() {
+    this._networkInterface.cleanup?.()
+    this._sessionId = undefined
+    this._sharedData = undefined
+    this._onChangeListener = undefined
+    SharedDataConnection.instances = SharedDataConnection.instances.filter(instance => instance !== this)
+  }
+
+  onChange(onChangeListener: automerge.PatchCallback<SharedData<T>>) {
+    this._onChangeListener = onChangeListener
+  }
+
   initSharedData(initData: (doc: SharedData<T>) => void) {
-    if (this._isSharedDataInitialized) {
+    if (this._sharedData) {
+      // already initialized
       return false
     }
 
     const sessionId = this._sessionId = uuid()
 
-    this._sharedData = automerge.init<SharedData<T>>()
-    this._sharedData = automerge.change(this._sharedData, (doc) => {
+    const emptyDoc = automerge.init({ patchCallback: this._patchCallback })
+
+    this._sharedData = automerge.change(emptyDoc, (doc) => {
       initData(doc)
       doc.__ = { sessionId }
     })
 
-    this._isSharedDataInitialized = true
-
     // message everyone that this node has initialised session and everyone should use this
     this._broadcastMessage({
       type: 'initSession',
-      sharedData: automerge.save(this._sharedData).buffer
+      sharedData: automerge.getAllChanges(this._sharedData)
     })
 
     return true
   }
 
   requestSharedDataSync() {
-    if (this._isSharedDataInitialized) {
+    if (this._sharedData) {
       return false
     }
 
@@ -147,22 +170,28 @@ export class SharedDataConnection<T extends {}> {
   }
 
 
-  get sharedData(): T {
+  get sharedData(): T | undefined {
     return this._sharedData
   }
 
   updateData(updater: (doc: SharedData<T>) => void) {
+    if (!this._sharedData) {
+      // not yet initialized
+      console.error('Not initialized')
+      throw new Error('Not initialized')
+    }
+
     this._sharedData = automerge.change(this._sharedData, updater)
 
     const changes = automerge.getLastLocalChange(this._sharedData)
 
     this._broadcastMessage({
       type: 'changes',
-      changes: changes && changes.buffer
+      changes: changes
     })
   }
 
-  private _broadcastMessage(message: Message) {
+  private _broadcastMessage(message: Message, src?: string) {
     if (message.msgId && this._previouslyBroadcastedIds.has(message.msgId)) {
       // this message has already been broadcasted. dont broadcast again
       this.log.debug('already seen message', message.msgId, 'dont broadcast')
@@ -174,14 +203,13 @@ export class SharedDataConnection<T extends {}> {
 
     this._previouslyBroadcastedIds.add(msgId)
 
-    // TODO: dont broadcast back to source if relay message (need to pass src connection to this method to do this)
     this._networkInterface.broadcast({
       ...message,
       sessionId: this._sessionId,
       msgId,
       originId,
       relay: this._networkInterface.id !== message.originId,
-    })
+    }, { excludeIds: src ? [src] : [] })
   }
 
   private _sendMessageTo(destConnection: NetworkConnection, message: Message) {
@@ -195,4 +223,24 @@ export class SharedDataConnection<T extends {}> {
       originId,
     })
   }
+
+  private _patchCallback: automerge.PatchCallback<SharedData<T>> = (patch, before, after) => {
+    this.log.debug('patchCallback', after)
+    this._onChangeListener && this._onChangeListener(patch, before, after)
+  }
 }
+
+declare global {
+  interface _Dev {
+    automerge: typeof automerge
+    SharedDataConnection: typeof SharedDataConnection
+  }
+
+  interface Window {
+    __dev: _Dev
+  }
+}
+
+window.__dev = window.__dev || {}
+window.__dev.automerge = automerge
+window.__dev.SharedDataConnection = SharedDataConnection
