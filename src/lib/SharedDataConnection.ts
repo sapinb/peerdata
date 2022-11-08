@@ -1,3 +1,4 @@
+import { EventEmitter } from 'eventemitter3'
 import * as automerge from '@automerge/automerge'
 import type { NetworkConnection, NetworkInterface } from './types'
 import {v4 as uuid} from 'uuid'
@@ -19,25 +20,28 @@ type Message = {
 
 const isMessage = (maybeMessage: any): maybeMessage is Message => maybeMessage && typeof maybeMessage.type == 'string'
 
+type SharedDataConnectionEvents<T extends {}> = {
+  change: (patch: automerge.Patch, before: SharedData<T>, after: SharedData<T>) => void
+}
 
-export class SharedDataConnection<T extends {}> {
+export class SharedDataConnection<T extends {}> extends EventEmitter<SharedDataConnectionEvents<T>> {
   private _networkInterface: NetworkInterface
   private _sessionId?: string
   private _sharedData?: automerge.Doc<SharedData<T>>
   private _previouslyBroadcastedIds = new Set<string>()
-  private _onChangeListener?: automerge.PatchCallback<SharedData<T>>
   readonly log: Logger
 
   static instances: SharedDataConnection<any>[] = []
 
   constructor(networkInterface: NetworkInterface, logger?: Logger) {
+    super()
     SharedDataConnection.instances.push(this)
-    this.log = logger || new ConsoleLogger('SharedDataConnection', ConsoleLogger.DEBUG)
+    this.log = logger || new ConsoleLogger('SharedDataConnection')
     this.log.tag = `SharedDataConnection/${networkInterface.id}`
 
     this._networkInterface = networkInterface
 
-    this._networkInterface.onConnected((conn) => {
+    this._networkInterface.on('connection.open', (conn) => {
       // on connection, if we dont already have a session, request for init
       this.log.debug('onConnected')
       if (!this._sharedData) {
@@ -47,7 +51,7 @@ export class SharedDataConnection<T extends {}> {
       }
     })
 
-    this._networkInterface.onData((conn, msg: any) => {
+    this._networkInterface.on('connection.data', (conn, msg: any) => {
       if (!isMessage(msg)) {
         return
       }
@@ -127,12 +131,8 @@ export class SharedDataConnection<T extends {}> {
     this._networkInterface.cleanup?.()
     this._sessionId = undefined
     this._sharedData = undefined
-    this._onChangeListener = undefined
+    this.removeAllListeners()
     SharedDataConnection.instances = SharedDataConnection.instances.filter(instance => instance !== this)
-  }
-
-  onChange(onChangeListener: automerge.PatchCallback<SharedData<T>>) {
-    this._onChangeListener = onChangeListener
   }
 
   initSharedData(initData: (doc: SharedData<T>) => void) {
@@ -226,7 +226,7 @@ export class SharedDataConnection<T extends {}> {
 
   private _patchCallback: automerge.PatchCallback<SharedData<T>> = (patch, before, after) => {
     this.log.debug('patchCallback', after)
-    this._onChangeListener && this._onChangeListener(patch, before, after)
+    this.emit('change', patch, before, after)
   }
 }
 

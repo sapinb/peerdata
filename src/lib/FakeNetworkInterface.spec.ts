@@ -1,12 +1,12 @@
 import { FakeNetworkInterface } from './FakeNetworkInterface'
-import { LOGLEVELS } from './Logger'
+import { LOGLEVELS, ConsoleLogger } from './Logger'
+
+// dont log anything during tests
+ConsoleLogger.logLevel = ConsoleLogger.NONE
 
 describe('FakeNetworkInterface', () => {
   const netInterfaceA = new FakeNetworkInterface()
   const netInterfaceB = new FakeNetworkInterface()
-
-  netInterfaceA.log.logLevel = LOGLEVELS.NONE
-  netInterfaceB.log.logLevel = LOGLEVELS.NONE
 
   describe('.connectTo', () => {
     it('should setup connection on both interfaces', () => {
@@ -17,16 +17,18 @@ describe('FakeNetworkInterface', () => {
     })
   })
 
-  describe('.onData', () => {
-    const onData = jest.fn()
-
-    netInterfaceA.connectTo(netInterfaceB.id)
-
-    netInterfaceA.onData(onData)
-
-    netInterfaceB.broadcast({ foo: 'bar' })
-
-    expect(onData).toHaveBeenCalled()
-    expect(onData.mock.calls[0][1]).toEqual({ foo: 'bar' })
+  describe('on data', () => {
+    it ('should call data event listener with message sent from connected interface', () => {
+      const onData = jest.fn()
+  
+      netInterfaceA.connectTo(netInterfaceB.id)
+  
+      netInterfaceA.on('connection.data', onData)
+  
+      netInterfaceB.broadcast({ foo: 'bar' })
+  
+      expect(onData).toHaveBeenCalled()
+      expect(onData.mock.calls[0][1]).toEqual({ foo: 'bar' })
+    })
   })
 })

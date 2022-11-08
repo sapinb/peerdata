@@ -66,6 +66,7 @@ describe('Logger', () => {
       jest.spyOn(logger, '_log')
   
       logger.logLevel = LOGLEVELS.DEFAULT
+      Logger.logLevel = LOGLEVELS.INFO
       TestLogger.logLevel = LOGLEVELS.ERROR
 
       expect(TestLogger.logLevel).not.toBe(Logger.logLevel)

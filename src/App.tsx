@@ -1,8 +1,7 @@
-import React, { useReducer, Reducer, useRef, useEffect, useState, useCallback } from 'react';
+import { useReducer, Reducer, useRef, useEffect, useState, useCallback } from 'react';
 import './App.css';
 import { SharedDataConnection } from './lib/SharedDataConnection'
 import { PeerJsInterface } from './lib/PeerJsInterface'
-import { NetworkInterface } from './lib/types'
 import { ConsoleLogger } from './lib/Logger'
 
 
@@ -13,6 +12,7 @@ type SharedState = {
 type State = {
   shared: SharedState
   local: {
+    id: string
     connectedTo: string[]
   }
 }
@@ -27,54 +27,34 @@ const initialState: State = {
     messages: []
   },
   local: {
+    id: '',
     connectedTo: []
   }
 }
 
-const log = new ConsoleLogger('App', ConsoleLogger.DEBUG)
+const log = new ConsoleLogger('App')
 
 function App() {
-  const netConnRef = useRef<NetworkInterface>()
+  const netConnRef = useRef<PeerJsInterface>()
   const sharedDataConnectionRef = useRef<SharedDataConnection<SharedState>>()
 
   const [state, dispatch] = useReducer<Reducer<State, Action>>((state, action) => {
     log.debug('action', action)
     switch (action.type) {
-      case 'SharedState/Change': {
+      case 'SharedState/Sync': {
+        // sync shared data to react state
         return {
           ...state,
           shared: action.newState as SharedState
         }
       }
-      case 'UI/AddMessage': {
-        // add message to sharedData
-
-        if (!sharedDataConnectionRef.current) {
-          log.error('no sharedDataConnectionRef')
-          return state
-        }
-
-        sharedDataConnectionRef.current?.updateData(sharedData => {
-          sharedData.messages.push(action.message as string)
-        })
-
-        return state
-      }
-      case 'UI/Connect': {
-        if (!netConnRef.current) {
-          log.error('no netConnref')
-          return state
-        }
-        const conn = netConnRef.current.connectTo(action.peerId as string)
-        if (!conn) {
-          log.error('Connection failed')
-          return state
-        }
+      case 'UI/NetConnectionStateChanged': {
         return {
           ...state,
           local: {
             ...state.local,
-            connectedTo: [...state.local.connectedTo, action.peerId as string]
+            id: action.id as string,
+            connectedTo: action.connections as string[],
           }
         }
       }
@@ -91,50 +71,60 @@ function App() {
     log.debug('use effect')
 
     const netConn = netConnRef.current = new PeerJsInterface()
-    const sharedDataConn = sharedDataConnectionRef.current = new SharedDataConnection(netConn)
+    const sharedDataConn = sharedDataConnectionRef.current =  new SharedDataConnection(netConn)
 
     log.debug('id', netConn.id)
 
-    sharedDataConn.onChange((patch, before, after) => {
+    sharedDataConn.on('change', (patch, before, after) => {
       dispatch({
-        type: 'SharedState/Change',
-        newState: after
+        type: 'SharedState/Sync',
+        newState: after,
+      })
+    })
+
+    netConn.on('change', (netState) => {
+      dispatch({
+        type: 'UI/NetConnectionStateChanged',
+        id: netState.id,
+        connections: netState.connections,
       })
     })
 
     return () => {
       // cleanup 
       log.debug('use effect: cleaning up')
+      // .cleanup() handles removing listeners
       netConn.cleanup()
       sharedDataConn.cleanup()
+      netConnRef.current = undefined
+      sharedDataConnectionRef.current = undefined
     }
+  }, [])
 
+  const onInitSession = useCallback(() => {
+    sharedDataConnectionRef.current?.initSharedData(doc => {
+      doc.messages = [`init from ${netConnRef.current?.id}`]
+    })
   }, [])
 
   const onConnectToPeer = useCallback(() => {
     log.debug('connectTo', peerId)
-    dispatch({
-      type: 'UI/Connect',
-      peerId: peerId
-    })
+
+    const conn = netConnRef.current?.connectTo(peerId)
+    if (!conn) {
+      log.error('Connection failed')
+    }
   }, [peerId])
 
   const onAddMessage = useCallback(() => {
-    dispatch({
-      type: 'UI/AddMessage',
-      message: message
+    sharedDataConnectionRef.current?.updateData(sharedData => {
+      sharedData.messages.push(message)
     })
   }, [message])
 
-  const onInitSession = () => {
-    sharedDataConnectionRef.current?.initSharedData(doc => {
-      doc.messages = [`init from ${netConnRef.current?.id}`]
-    })
-  }
-
   return (
     <div>
-      <div>ID: {netConnRef.current?.id}</div>
+      <div>ID: {state.local.id}</div>
       <div>
         Session: {sharedDataConnectionRef.current?.sharedData ? 'Y' : 'N'}
         <button onClick={onInitSession}>Init Session</button>

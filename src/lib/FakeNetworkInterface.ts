@@ -1,18 +1,18 @@
-import type { NetworkConnection, OnConnectedListener, OnDataListener, BroadcastConfig, NetworkInterface } from './types'
+import { EventEmitter } from 'eventemitter3'
+import type { NetworkConnection, BroadcastConfig, NetworkInterface, NetworkInterfaceEvents } from './types'
 import { Logger, ConsoleLogger } from './Logger'
 
-export class FakeNetworkInterface implements NetworkInterface {
+export class FakeNetworkInterface extends EventEmitter<NetworkInterfaceEvents> implements NetworkInterface {
   static _idCounter = 1
   static _allConnections = new Map<string, FakeNetworkInterface>
 
   readonly id: string
 
   readonly _connections = new Map<string, FakeNetworkInterface>
-  private _onDataListener?: OnDataListener
-  private _onConnectedListener?: OnConnectedListener
   readonly log: Logger
 
   constructor() {
+    super()
     this.id = (FakeNetworkInterface._idCounter++).toString()
     this.log = new ConsoleLogger(`FakeNetworkInterface/${this.id}`)
 
@@ -28,17 +28,9 @@ export class FakeNetworkInterface implements NetworkInterface {
     this._connections.set(destId, destConnection)
     destConnection._connections.set(this.id, this)
 
-    this._onConnectedListener && this._onConnectedListener(this._getSendInterface(destConnection))
+    this.emit('connection.open', this._getSendInterface(destConnection))
 
     return this._getSendInterface(destConnection)
-  }
-
-  onData (listener: OnDataListener) {
-    this._onDataListener = listener
-  }
-
-  onConnected (listener: OnConnectedListener) {
-    this._onConnectedListener = listener
   }
 
   broadcast (data: unknown, options: BroadcastConfig = { excludeIds: [] }) {
@@ -73,7 +65,7 @@ export class FakeNetworkInterface implements NetworkInterface {
 
     this.log.debug('recv', srcId, '->', this.id, data.type)
 
-    this._onDataListener && this._onDataListener(this._getSendInterface(srcConn), data)
+    this.emit('connection.data', this._getSendInterface(srcConn), data)
   }
 
   private _getSendInterface(conn: FakeNetworkInterface): NetworkConnection {
